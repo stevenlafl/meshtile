@@ -26,9 +26,23 @@ CMake auto-downloads all third-party dependencies via FetchContent (NTIA ITM, cp
 |------|---------|-------------|
 | `--host` | `0.0.0.0` | Bind address |
 | `--port` | `8080` | Listen port |
-| `--nodes` | meshmapper API | Node source URL or local JSON file |
-| `--noise-data` | meshmapper API | Noise floor data URL or local file |
+| `--region` | `den` | [MeshMapper](https://meshmapper.net) region prefix (see below) |
+| `--nodes` | meshmapper API | Override node source with a URL or local JSON file |
+| `--noise-data` | meshmapper API | Override noise floor data with a URL or local file |
 | `--max-range` | `30` | Max propagation range per node (km) |
+
+### MeshMapper Regions
+
+Node and noise floor data are fetched from [MeshMapper](https://meshmapper.net) regional instances. Each instance uses a short prefix as its subdomain (e.g. `den.meshmapper.net`, `oma.meshmapper.net`). Use `--region` to select which instance to pull from:
+
+```bash
+./meshtile --region den    # Denver (default)
+./meshtile --region oma    # Omaha
+./meshtile --region pnw    # Pacific Northwest
+./meshtile --region yyc    # Calgary
+```
+
+The full list of available regions is at [meshmapper.net](https://meshmapper.net). The `--nodes` and `--noise-data` flags override the region-based URLs if you need a custom source.
 
 ### ITM Propagation Parameters
 
@@ -73,8 +87,8 @@ In Google Earth: hamburger menu > Map Style > Add Tile Overlay > `http://host:po
 
 ## Caching
 
-- Per-node signal grids are cached to disk at `~/.cache/meshtile/grids/`
-- Rendered tile PNGs are cached to disk + memory at `~/.cache/meshtile/tiles/`
+- Per-node signal grids are cached to disk at `~/.cache/meshtile/<region>/grids/`
+- Rendered tile PNGs are cached to disk + memory at `~/.cache/meshtile/<region>/tiles/`
 - HGT elevation tiles are cached at `~/.cache/mesh3d/hgt/` (shared with mesh3d)
 - Changing any ITM or RF parameter automatically invalidates cached grids on next run
 
