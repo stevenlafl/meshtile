@@ -11,7 +11,7 @@ namespace meshtile {
 
 class SignalCache {
 public:
-    SignalCache();
+    explicit SignalCache(const std::string& region = "den");
 
     // Precompute signal grids. Loads cached grids from disk when available.
     bool precompute(const std::vector<Node>& nodes, const RfConfig& rf_config);

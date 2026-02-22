@@ -111,11 +111,12 @@ static std::vector<double> extract_profile(
 
 // ── Constructor ──
 
-SignalCache::SignalCache()
-    : m_grid_cache([]{
+SignalCache::SignalCache(const std::string& region)
+    : m_grid_cache([&region]{
         const char* home = std::getenv("HOME");
-        if (home) return std::string(home) + "/.cache/meshtile/grids";
-        return std::string("/tmp/meshtile/grids");
+        std::string base = home ? std::string(home) + "/.cache/meshtile"
+                                : std::string("/tmp/meshtile");
+        return base + "/" + region + "/grids";
     }())
 {
     m_cache_dir = m_grid_cache.cache_dir();

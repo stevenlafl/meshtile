@@ -15,6 +15,7 @@ int main(int argc, char* argv[]) {
 
     int port = 8080;
     std::string host = "0.0.0.0";
+    std::string region = "den";
     std::string nodes_source;
     std::string noise_source;
     float max_range = 30.0f;
@@ -28,6 +29,7 @@ int main(int argc, char* argv[]) {
         else if (arg == "--host" && i + 1 < argc) host = argv[++i];
         else if (arg == "--nodes" && i + 1 < argc) nodes_source = argv[++i];
         else if (arg == "--noise-data" && i + 1 < argc) noise_source = argv[++i];
+        else if (arg == "--region" && i + 1 < argc) region = argv[++i];
         else if (arg == "--max-range" && i + 1 < argc) max_range = std::atof(argv[++i]);
         else if (arg == "--climate" && i + 1 < argc) rf_config.climate = std::atoi(argv[++i]);
         else if (arg == "--clutter-height" && i + 1 < argc) rf_config.clutter_height_m = std::atof(argv[++i]);
@@ -61,6 +63,7 @@ int main(int argc, char* argv[]) {
         }
     };
     LOG_INFO("Configuration:");
+    LOG_INFO("  region=%s", region.c_str());
     LOG_INFO("  host=%s port=%d max-range=%.1f km", host.c_str(), port, max_range);
     LOG_INFO("  climate=%d refractivity=%.1f polarization=%d",
              rf_config.climate, rf_config.refractivity, rf_config.polarization);
@@ -73,7 +76,10 @@ int main(int argc, char* argv[]) {
 
     // Fetch nodes
     meshtile::ApiClientConfig api_config;
-    if (!nodes_source.empty()) api_config.source = nodes_source;
+    if (!nodes_source.empty())
+        api_config.source = nodes_source;
+    else
+        api_config.source = "https://" + region + ".meshmapper.net/api.php?request=repeaters";
     api_config.default_max_range_km = max_range;
 
     auto nodes = meshtile::fetch_nodes(api_config);
@@ -88,7 +94,7 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<meshtile::NoiseMap> noise_map;
     {
         std::string src = noise_source.empty()
-            ? "https://den.meshmapper.net/api.php?request=map_data"
+            ? "https://" + region + ".meshmapper.net/api.php?request=map_data"
             : noise_source;
         auto obs = meshtile::load_noise_observations(src);
         if (!obs.empty()) {
@@ -97,7 +103,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Pre-compute signal grids
-    meshtile::SignalCache cache;
+    meshtile::SignalCache cache(region);
     cache.precompute(nodes, rf_config);
 
     // Start HTTP server
