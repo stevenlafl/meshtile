@@ -35,7 +35,8 @@ bool TileRenderer::render_signal_rgba(int z, int x, int y, std::vector<uint8_t>&
             }
 
             RGBA color = signal_to_rgba(dbm, min_dbm,
-                                        m_rf_config.display_max_dbm);
+                                        m_rf_config.display_max_dbm,
+                                        m_rf_config.colormap);
 
             if (color.a > 0) has_signal = true;
 

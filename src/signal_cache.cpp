@@ -39,6 +39,15 @@ static uint64_t compute_params_hash(const Node& n, const RfConfig& rf) {
     mix(&rf.rx_height_agl_m, sizeof(rf.rx_height_agl_m));
     mix(&rf.rx_antenna_gain_dbi, sizeof(rf.rx_antenna_gain_dbi));
     mix(&rf.rx_cable_loss_db, sizeof(rf.rx_cable_loss_db));
+    mix(&rf.climate, sizeof(rf.climate));
+    mix(&rf.refractivity, sizeof(rf.refractivity));
+    mix(&rf.polarization, sizeof(rf.polarization));
+    mix(&rf.ground_dielectric, sizeof(rf.ground_dielectric));
+    mix(&rf.ground_conductivity, sizeof(rf.ground_conductivity));
+    mix(&rf.clutter_height_m, sizeof(rf.clutter_height_m));
+    mix(&rf.time_pct, sizeof(rf.time_pct));
+    mix(&rf.location_pct, sizeof(rf.location_pct));
+    mix(&rf.situation_pct, sizeof(rf.situation_pct));
     return h;
 }
 
@@ -289,15 +298,16 @@ SignalGrid SignalCache::compute_node(const Node& node, const RfConfig& rf_config
     float eirp = node.tx_power_dbm + node.antenna_gain_dbi - node.cable_loss_db;
     float max_range_cells = node.max_range_km * 1000.0f / cell_m;
 
-    int climate = 5;
-    double N_0 = 301.0;
-    int pol = 1;
-    double epsilon = 15.0;
-    double sigma = 0.005;
+    int climate = rf_config.climate;
+    double N_0 = rf_config.refractivity;
+    int pol = rf_config.polarization;
+    double epsilon = rf_config.ground_dielectric;
+    double sigma = rf_config.ground_conductivity;
     int mdvar = 12;
-    double time_pct = 50.0;
-    double location_pct = 50.0;
-    double situation_pct = 50.0;
+    double time_pct = rf_config.time_pct;
+    double location_pct = rf_config.location_pct;
+    double situation_pct = rf_config.situation_pct;
+    float clutter_h = rf_config.clutter_height_m;
 
     for (int r = 0; r < total_rows; ++r) {
         for (int c = 0; c < total_cols; ++c) {
@@ -323,7 +333,7 @@ SignalGrid SignalCache::compute_node(const Node& node, const RfConfig& rf_config
             pfl[0] = static_cast<double>(n_pts - 1);
             pfl[1] = step_m;
             for (int i = 0; i < n_pts; ++i) {
-                pfl[i + 2] = profile[i];
+                pfl[i + 2] = profile[i] + static_cast<double>(clutter_h);
             }
 
             double A_db = 0;

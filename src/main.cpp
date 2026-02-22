@@ -19,6 +19,9 @@ int main(int argc, char* argv[]) {
     std::string noise_source;
     float max_range = 30.0f;
 
+    meshtile::RfConfig rf_config;
+    std::string colormap_name;
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--port" && i + 1 < argc)     port = std::atoi(argv[++i]);
@@ -26,6 +29,24 @@ int main(int argc, char* argv[]) {
         else if (arg == "--nodes" && i + 1 < argc) nodes_source = argv[++i];
         else if (arg == "--noise-data" && i + 1 < argc) noise_source = argv[++i];
         else if (arg == "--max-range" && i + 1 < argc) max_range = std::atof(argv[++i]);
+        else if (arg == "--climate" && i + 1 < argc) rf_config.climate = std::atoi(argv[++i]);
+        else if (arg == "--clutter-height" && i + 1 < argc) rf_config.clutter_height_m = std::atof(argv[++i]);
+        else if (arg == "--time-pct" && i + 1 < argc) rf_config.time_pct = std::atof(argv[++i]);
+        else if (arg == "--location-pct" && i + 1 < argc) rf_config.location_pct = std::atof(argv[++i]);
+        else if (arg == "--situation-pct" && i + 1 < argc) rf_config.situation_pct = std::atof(argv[++i]);
+        else if (arg == "--ground-dielectric" && i + 1 < argc) rf_config.ground_dielectric = std::atof(argv[++i]);
+        else if (arg == "--ground-conductivity" && i + 1 < argc) rf_config.ground_conductivity = std::atof(argv[++i]);
+        else if (arg == "--refractivity" && i + 1 < argc) rf_config.refractivity = std::atof(argv[++i]);
+        else if (arg == "--colormap" && i + 1 < argc) colormap_name = argv[++i];
+    }
+
+    if (!colormap_name.empty()) {
+        if (colormap_name == "plasma") rf_config.colormap = meshtile::Colormap::plasma;
+        else if (colormap_name == "viridis") rf_config.colormap = meshtile::Colormap::viridis;
+        else if (colormap_name == "turbo") rf_config.colormap = meshtile::Colormap::turbo;
+        else if (colormap_name == "inferno") rf_config.colormap = meshtile::Colormap::inferno;
+        else if (colormap_name == "red_yellow_green") rf_config.colormap = meshtile::Colormap::red_yellow_green;
+        else LOG_WARN("Unknown colormap '%s', using default", colormap_name.c_str());
     }
 
     // Fetch nodes
@@ -54,7 +75,6 @@ int main(int argc, char* argv[]) {
     }
 
     // Pre-compute signal grids
-    meshtile::RfConfig rf_config;
     meshtile::SignalCache cache;
     cache.precompute(nodes, rf_config);
 

@@ -22,6 +22,8 @@ struct Node {
     float max_range_km       = 30.0f;
 };
 
+enum class Colormap { red_yellow_green, plasma, viridis, turbo, inferno };
+
 struct RfConfig {
     float rx_sensitivity_dbm  = -130.0f;
     float rx_height_agl_m     = 1.0f;
@@ -29,6 +31,19 @@ struct RfConfig {
     float rx_cable_loss_db    = 2.0f;
     float display_min_dbm     = -130.0f;
     float display_max_dbm     = -80.0f;
+
+    // ITM environment parameters
+    int    climate              = 5;       // CLIMATE__CONTINENTAL_TEMPERATE
+    double refractivity         = 301.0;   // N-units
+    int    polarization         = 1;       // POLARIZATION__VERTICAL
+    double ground_dielectric    = 15.0;
+    double ground_conductivity  = 0.005;   // S/m
+    float  clutter_height_m     = 0.0f;    // ground clutter (trees/buildings)
+    double time_pct             = 50.0;    // ITM time variability %
+    double location_pct         = 50.0;    // ITM location variability %
+    double situation_pct        = 50.0;    // ITM situation variability %
+
+    Colormap colormap = Colormap::red_yellow_green;
 };
 
 struct SignalGrid {
