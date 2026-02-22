@@ -43,7 +43,7 @@ struct RfConfig {
     double location_pct         = 50.0;    // ITM location variability %
     double situation_pct        = 50.0;    // ITM situation variability %
 
-    Colormap colormap = Colormap::red_yellow_green;
+    Colormap colormap = Colormap::plasma;
 };
 
 struct SignalGrid {

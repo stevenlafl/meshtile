@@ -63,7 +63,7 @@ The full list of available regions is at [meshmapper.net](https://meshmapper.net
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--colormap` | `red_yellow_green` | Tile colormap: `red_yellow_green`, `plasma`, `viridis`, `turbo`, `inferno` |
+| `--colormap` | `plasma` | Tile colormap: `plasma`, `red_yellow_green`, `viridis`, `turbo`, `inferno` |
 
 ### Example
 
@@ -93,6 +93,35 @@ In Google Earth: hamburger menu > Map Style > Add Tile Overlay > `http://host:po
 - Rendered tile PNGs are cached to disk + memory at `~/.cache/meshtile/<region>/tiles/`
 - HGT elevation tiles are cached at `~/.cache/mesh3d/hgt/` (shared with mesh3d)
 - Changing any ITM or RF parameter automatically invalidates cached grids on next run
+
+## Docker
+
+```bash
+docker build -t meshtile .
+docker run -v meshtile-cache:/data/.cache -p 8080:8080 meshtile --region den
+```
+
+Or with Docker Compose:
+
+```yaml
+services:
+  meshtile:
+    image: stevenlafl/meshtile
+    ports:
+      - "8080:8080"
+    volumes:
+      - meshtile-cache:/data/.cache
+    command: ["--region", "den"]
+
+volumes:
+  meshtile-cache:
+```
+
+```bash
+docker compose up
+```
+
+The cache volume persists signal grids and HGT elevation data across container restarts, avoiding expensive recomputation. Each region gets its own cache namespace within the volume.
 
 ## How It Works
 
