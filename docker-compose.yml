@@ -1,0 +1,11 @@
+services:
+  meshtile:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - meshtile-cache:/data/.cache
+    command: ["--region", "den"]
+
+volumes:
+  meshtile-cache:
