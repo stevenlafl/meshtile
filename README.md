@@ -2,6 +2,8 @@
 
 C++ HTTP tile server that computes RF signal coverage for Meshtastic mesh network nodes using the [NTIA ITM (Longley-Rice)](https://github.com/NTIA/itm) propagation model and SRTM elevation data, then serves blended signal-strength tiles as 256x256 PNGs.
 
+![Meshtile screenshot](docs/screenshot1.png)
+
 ## Build
 
 Requires: libcurl, zlib, a C++17 compiler.
