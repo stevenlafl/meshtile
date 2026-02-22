@@ -1,6 +1,6 @@
 #include "node_renderer.h"
 #include "tile_math.h"
-#include <lodepng.h>
+#include "png_encode.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -144,55 +144,39 @@ static void draw_filled_circle(std::vector<uint8_t>& buf, int cx, int cy,
 }
 
 static void draw_char(std::vector<uint8_t>& buf, int x, int y,
-                       char ch, RGBA8 color) {
+                       char ch, RGBA8 color, int scale = 1) {
     if (ch < 32 || ch > 126) return;
     const uint8_t* glyph = font_5x7[ch - 32];
     for (int row = 0; row < 7; ++row) {
         uint8_t bits = glyph[row];
         for (int col = 0; col < 5; ++col) {
-            if (bits & (0x10 >> col))
-                set_pixel(buf, x + col, y + row, color);
+            if (bits & (0x10 >> col)) {
+                for (int sy = 0; sy < scale; ++sy)
+                    for (int sx = 0; sx < scale; ++sx)
+                        set_pixel(buf, x + col * scale + sx, y + row * scale + sy, color);
+            }
         }
     }
 }
 
 static void draw_text(std::vector<uint8_t>& buf, int x, int y,
-                       const std::string& text, RGBA8 fg, RGBA8 shadow) {
-    // Shadow pass (offset +1,+1)
+                       const std::string& text, RGBA8 fg, RGBA8 shadow, int scale = 1) {
+    int char_w = 6 * scale;
+    int shadow_off = std::max(1, scale / 2);
+    // Shadow pass
     int sx = x;
     for (char ch : text) {
         if (static_cast<unsigned char>(ch) > 127) continue;
-        draw_char(buf, sx + 1, y + 1, ch, shadow);
-        sx += 6;
+        draw_char(buf, sx + shadow_off, y + shadow_off, ch, shadow, scale);
+        sx += char_w;
     }
     // Foreground pass
     sx = x;
     for (char ch : text) {
         if (static_cast<unsigned char>(ch) > 127) continue;
-        draw_char(buf, sx, y, ch, fg);
-        sx += 6;
+        draw_char(buf, sx, y, ch, fg, scale);
+        sx += char_w;
     }
-}
-
-// Same transparent PNG as tile_renderer uses
-static std::vector<uint8_t> make_transparent_png() {
-    std::vector<uint8_t> pixels(TILE * TILE, 0);
-    std::vector<uint8_t> png;
-    lodepng::State state;
-    state.info_raw.colortype = LCT_PALETTE;
-    state.info_raw.bitdepth = 1;
-    state.info_png.color.colortype = LCT_PALETTE;
-    state.info_png.color.bitdepth = 1;
-    lodepng_palette_add(&state.info_png.color, 0, 0, 0, 0);
-    lodepng_palette_add(&state.info_raw, 0, 0, 0, 0);
-    state.encoder.auto_convert = 0;
-    lodepng::encode(png, pixels, TILE, TILE, state);
-    return png;
-}
-
-static const std::vector<uint8_t>& transparent_png() {
-    static auto png = make_transparent_png();
-    return png;
 }
 
 // Strip leading emoji/non-ASCII from node name for display
@@ -211,51 +195,69 @@ static std::string ascii_name(const std::string& name) {
 
 NodeRenderer::NodeRenderer(const std::vector<Node>& nodes) : m_nodes(nodes) {}
 
-std::vector<uint8_t> NodeRenderer::render_tile(int z, int x, int y) const {
+bool NodeRenderer::composite_onto(int z, int x, int y, std::vector<uint8_t>& rgba) const {
     Bounds bounds = tile_to_bounds(z, x, y);
 
-    // Find nodes in this tile
-    std::vector<size_t> in_tile;
+    // Scale marker size with zoom: bigger when zoomed in so they stay visible.
+    int radius = std::clamp(z - 4, 6, 20);
+    int text_scale = std::clamp((z - 8) / 3, 1, 4);
+
+    // Expand search bounds so nodes near tile edges still draw their
+    // marker + text onto this tile. Margin = radius + max label width in pixels,
+    // converted to degrees.
+    double lat_span = bounds.max_lat - bounds.min_lat;
+    double lon_span = bounds.max_lon - bounds.min_lon;
+    double margin_px = radius + 20 * 6 * text_scale; // radius + ~20 chars of text
+    double lat_margin = margin_px / TILE * lat_span;
+    double lon_margin = margin_px / TILE * lon_span;
+
+    Bounds search = {
+        bounds.min_lat - lat_margin, bounds.max_lat + lat_margin,
+        bounds.min_lon - lon_margin, bounds.max_lon + lon_margin
+    };
+
+    std::vector<size_t> nearby;
     for (size_t i = 0; i < m_nodes.size(); ++i) {
         const auto& n = m_nodes[i];
-        if (n.lat >= bounds.min_lat && n.lat <= bounds.max_lat &&
-            n.lon >= bounds.min_lon && n.lon <= bounds.max_lon) {
-            in_tile.push_back(i);
+        if (n.lat >= search.min_lat && n.lat <= search.max_lat &&
+            n.lon >= search.min_lon && n.lon <= search.max_lon) {
+            nearby.push_back(i);
         }
     }
 
-    if (in_tile.empty()) return transparent_png();
+    if (nearby.empty()) return false;
 
-    std::vector<uint8_t> rgba(TILE * TILE * 4, 0);
-    int radius = std::clamp(18 - z, 3, 12);
-    RGBA8 fill    = {60, 180, 255, 220};   // light blue
-    RGBA8 outline = {20,  60, 100, 255};   // dark blue
-    RGBA8 text_fg = {255, 255, 255, 255};  // white
-    RGBA8 text_sh = {0,   0,   0,   180};  // dark shadow
+    RGBA8 fill    = {60, 180, 255, 220};
+    RGBA8 outline = {20,  60, 100, 255};
+    RGBA8 text_fg = {255, 255, 255, 255};
+    RGBA8 text_sh = {0,   0,   0,   180};
 
-    double lat_span = bounds.max_lat - bounds.min_lat;
-    double lon_span = bounds.max_lon - bounds.min_lon;
-
-    for (size_t idx : in_tile) {
+    for (size_t idx : nearby) {
         const auto& n = m_nodes[idx];
+        // px/py can be outside 0..255 — set_pixel clips safely
         int px = static_cast<int>((n.lon - bounds.min_lon) / lon_span * TILE);
         int py = static_cast<int>((bounds.max_lat - n.lat) / lat_span * TILE);
-        px = std::clamp(px, 0, TILE - 1);
-        py = std::clamp(py, 0, TILE - 1);
 
         draw_filled_circle(rgba, px, py, radius, fill, outline);
 
         std::string label = ascii_name(n.name);
         if (!label.empty()) {
             int tx = px + radius + 3;
-            int ty = py - 3;
-            draw_text(rgba, tx, ty, label, text_fg, text_sh);
+            int ty = py - 3 * text_scale;
+            draw_text(rgba, tx, ty, label, text_fg, text_sh, text_scale);
         }
     }
 
-    std::vector<uint8_t> png;
-    lodepng::encode(png, rgba, TILE, TILE);
-    return png;
+    return true;
+}
+
+std::vector<uint8_t> NodeRenderer::render_tile(int z, int x, int y) const {
+    std::vector<uint8_t> rgba(TILE * TILE * 4, 0);
+
+    if (!composite_onto(z, x, y, rgba))
+        return transparent_tile_png();
+
+    return encode_tile_png(rgba);
 }
 
 } // namespace meshtile

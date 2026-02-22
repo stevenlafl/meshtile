@@ -75,10 +75,13 @@ target_include_directories(lodepng PUBLIC ${lodepng_SOURCE_DIR})
 # Main executable
 set(SOURCES
     src/main.cpp
+    src/http_fetch.cpp
     src/api_client.cpp
     src/signal_cache.cpp
     src/tile_renderer.cpp
     src/node_renderer.cpp
+    src/png_encode.cpp
+    src/noise_map.cpp
     src/hgt_provider.cpp
     src/disk_cache.cpp
     src/log.cpp
@@ -99,6 +102,7 @@ target_link_libraries(meshtile
 
 # Shared source files (everything except main.cpp)
 set(LIB_SOURCES
+    src/http_fetch.cpp
     src/api_client.cpp
     src/signal_cache.cpp
     src/hgt_provider.cpp
