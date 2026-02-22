@@ -49,6 +49,28 @@ int main(int argc, char* argv[]) {
         else LOG_WARN("Unknown colormap '%s', using default", colormap_name.c_str());
     }
 
+    // Log effective configuration
+    auto colormap_str = [](meshtile::Colormap c) -> const char* {
+        switch (c) {
+            case meshtile::Colormap::plasma:           return "plasma";
+            case meshtile::Colormap::viridis:          return "viridis";
+            case meshtile::Colormap::turbo:            return "turbo";
+            case meshtile::Colormap::inferno:          return "inferno";
+            case meshtile::Colormap::red_yellow_green: return "red_yellow_green";
+            default:                                   return "red_yellow_green";
+        }
+    };
+    LOG_INFO("Configuration:");
+    LOG_INFO("  host=%s port=%d max-range=%.1f km", host.c_str(), port, max_range);
+    LOG_INFO("  climate=%d refractivity=%.1f polarization=%d",
+             rf_config.climate, rf_config.refractivity, rf_config.polarization);
+    LOG_INFO("  ground-dielectric=%.1f ground-conductivity=%.4f",
+             rf_config.ground_dielectric, rf_config.ground_conductivity);
+    LOG_INFO("  clutter-height=%.1f m", rf_config.clutter_height_m);
+    LOG_INFO("  time-pct=%.1f location-pct=%.1f situation-pct=%.1f",
+             rf_config.time_pct, rf_config.location_pct, rf_config.situation_pct);
+    LOG_INFO("  colormap=%s", colormap_str(rf_config.colormap));
+
     // Fetch nodes
     meshtile::ApiClientConfig api_config;
     if (!nodes_source.empty()) api_config.source = nodes_source;
