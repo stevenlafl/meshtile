@@ -11,7 +11,7 @@ namespace meshtile {
 
 class SignalCache {
 public:
-    explicit SignalCache(const std::string& region = "den");
+    explicit SignalCache(const std::string& region = "den", int compute_threads = 0);
 
     // Precompute signal grids. Loads cached grids from disk when available.
     bool precompute(const std::vector<Node>& nodes, const RfConfig& rf_config);
@@ -33,6 +33,7 @@ private:
     std::mutex m_hgt_mutex;
     DiskCache m_grid_cache;  // per-node grid files: ~/.cache/meshtile/grids/
     std::string m_cache_dir;
+    size_t m_compute_threads = 0;  // 0 = hardware_concurrency
 
     std::unordered_set<std::string> load_known_nodes();
     void save_known_nodes(const std::unordered_set<std::string>& ids);

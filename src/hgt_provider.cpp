@@ -1,21 +1,24 @@
 #include "hgt_provider.h"
+#include "http_fetch.h"
 #include "log.h"
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <algorithm>
-#include <curl/curl.h>
+#include <fstream>
+#include <filesystem>
 #include <zlib.h>
+
+namespace fs = std::filesystem;
 
 namespace meshtile {
 
-HgtProvider::HgtProvider()
-    : m_cache([] {
-        const char* home = std::getenv("HOME");
-        if (home) return std::string(home) + "/.cache/mesh3d/hgt";
-        return std::string("/tmp/mesh3d/hgt");
-    }())
-{
-    LOG_INFO("HGT cache: %s", m_cache.cache_dir().c_str());
+HgtProvider::HgtProvider() {
+    const char* home = std::getenv("HOME");
+    m_cache_dir = home ? std::string(home) + "/.cache/mesh3d/hgt"
+                       : std::string("/tmp/mesh3d/hgt");
+    fs::create_directories(m_cache_dir);
+    LOG_INFO("HGT cache: %s", m_cache_dir.c_str());
 }
 
 std::string HgtProvider::make_filename(int lat_floor, int lon_floor) {
@@ -36,126 +39,150 @@ Bounds HgtProvider::hgt_bounds(int lat_floor, int lon_floor) {
     };
 }
 
-std::vector<float> HgtProvider::load(int lat_floor, int lon_floor, int& rows, int& cols) {
+const float* HgtProvider::load(int lat_floor, int lon_floor, int& rows, int& cols) {
     std::string filename = make_filename(lat_floor, lon_floor);
-    auto raw = acquire_hgt(filename);
-    if (raw.empty()) return {};
-    auto elev = read_hgt(raw, rows, cols);
-    if (!elev.empty())
-        LOG_INFO("HGT: loaded %s (%dx%d)", filename.c_str(), rows, cols);
-    return elev;
+
+    // Check if already mmapped
+    auto it = m_mmap_cache.find(filename);
+    if (it != m_mmap_cache.end()) {
+        size_t samples = it->second.size() / sizeof(float);
+        if (samples == 3601UL * 3601) { rows = cols = 3601; }
+        else if (samples == 1201UL * 1201) { rows = cols = 1201; }
+        else return nullptr;
+        return it->second.as<float>();
+    }
+
+    // Ensure .dat file exists on disk
+    std::string dat_path = acquire_dat(filename);
+    if (dat_path.empty()) return nullptr;
+
+    // mmap the .dat file
+    MmapFile mf;
+    if (!mf.open(dat_path)) return nullptr;
+
+    size_t samples = mf.size() / sizeof(float);
+    if (samples == 3601UL * 3601) { rows = cols = 3601; }
+    else if (samples == 1201UL * 1201) { rows = cols = 1201; }
+    else {
+        LOG_WARN("HGT: unexpected .dat size %zu bytes for %s", mf.size(), filename.c_str());
+        return nullptr;
+    }
+
+    const float* ptr = mf.as<float>();
+    m_mmap_cache.emplace(filename, std::move(mf));
+
+    LOG_INFO("HGT: mmapped %s (%dx%d)", filename.c_str(), rows, cols);
+    return ptr;
 }
 
-std::vector<float> HgtProvider::read_hgt(const std::vector<uint8_t>& data, int& rows, int& cols) {
-    size_t samples = data.size() / 2;
-    if (samples == 3601 * 3601) {
-        rows = cols = 3601;
-    } else if (samples == 1201 * 1201) {
-        rows = cols = 1201;
-    } else {
-        LOG_WARN("HGT: unexpected size %zu bytes (%zu samples)", data.size(), samples);
+std::string HgtProvider::acquire_dat(const std::string& filename) {
+    // filename is e.g. "N39W105.hgt"
+    std::string base = filename.substr(0, filename.size() - 4); // "N39W105"
+    std::string dat_path = m_cache_dir + "/" + base + ".dat";
+    std::string hgt_path = m_cache_dir + "/" + filename;
+
+    // Already have the .dat float file?
+    if (fs::exists(dat_path)) return dat_path;
+
+    // Have the raw .hgt but no .dat? Just convert.
+    if (fs::exists(hgt_path)) {
+        LOG_INFO("HGT: converting %s -> .dat", filename.c_str());
+        if (convert_hgt_to_float(hgt_path, dat_path)) return dat_path;
+        LOG_WARN("HGT: conversion failed for %s", filename.c_str());
         return {};
     }
 
-    std::vector<float> elev(samples);
-    const uint8_t* p = data.data();
-    for (size_t i = 0; i < samples; ++i) {
-        int16_t val = static_cast<int16_t>((p[i * 2] << 8) | p[i * 2 + 1]);
-        if (val < -1000) val = 0;
-        elev[i] = static_cast<float>(val);
-    }
-    return elev;
-}
+    // Need to download
+    std::string gz_path = m_cache_dir + "/" + filename + ".gz";
+    if (!download_hgt_gz(filename, gz_path)) return {};
 
-std::vector<uint8_t> HgtProvider::acquire_hgt(const std::string& filename) {
-    if (m_cache.has(filename)) {
-        return m_cache.read(filename);
-    }
-
-    auto compressed = download_hgt(filename);
-    if (compressed.empty()) return {};
-
-    auto raw = decompress_gz(compressed);
-    if (raw.empty()) {
+    // Decompress .gz -> .hgt (streaming, 64KB buffer)
+    LOG_INFO("HGT: decompressing %s", filename.c_str());
+    if (!decompress_gz_file(gz_path, hgt_path)) {
         LOG_WARN("HGT: decompression failed for %s", filename.c_str());
+        fs::remove(gz_path);
+        return {};
+    }
+    fs::remove(gz_path); // clean up .gz
+
+    // Convert .hgt -> .dat (streaming, ~48KB buffer)
+    LOG_INFO("HGT: converting %s -> .dat", filename.c_str());
+    if (!convert_hgt_to_float(hgt_path, dat_path)) {
+        LOG_WARN("HGT: conversion failed for %s", filename.c_str());
         return {};
     }
 
-    m_cache.write(filename, raw);
-    LOG_INFO("HGT: cached %s (%zu bytes)", filename.c_str(), raw.size());
-    return raw;
+    LOG_INFO("HGT: cached %s", dat_path.c_str());
+    return dat_path;
 }
 
-static size_t curl_write_cb(void* ptr, size_t size, size_t nmemb, void* userdata) {
-    auto* buf = static_cast<std::vector<uint8_t>*>(userdata);
-    size_t total = size * nmemb;
-    buf->insert(buf->end(),
-                static_cast<uint8_t*>(ptr),
-                static_cast<uint8_t*>(ptr) + total);
-    return total;
-}
-
-std::vector<uint8_t> HgtProvider::download_hgt(const std::string& filename) {
+bool HgtProvider::download_hgt_gz(const std::string& filename, const std::string& gz_path) {
     std::string lat_dir = filename.substr(0, 3);
     std::string url = "https://s3.amazonaws.com/elevation-tiles-prod/skadi/"
                     + lat_dir + "/" + filename + ".gz";
-
     LOG_INFO("HGT: downloading %s", url.c_str());
-
-    CURL* curl = curl_easy_init();
-    if (!curl) return {};
-
-    std::vector<uint8_t> buffer;
-    buffer.reserve(3 * 1024 * 1024);
-
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
-
-    CURLcode res = curl_easy_perform(curl);
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    curl_easy_cleanup(curl);
-
-    if (res != CURLE_OK) {
-        LOG_WARN("HGT: download failed: %s", curl_easy_strerror(res));
-        return {};
-    }
-    if (http_code != 200) {
-        LOG_WARN("HGT: HTTP %ld for %s", http_code, url.c_str());
-        return {};
-    }
-
-    LOG_INFO("HGT: downloaded %zu bytes", buffer.size());
-    return buffer;
+    return fetch_to_file(url, gz_path);
 }
 
-std::vector<uint8_t> HgtProvider::decompress_gz(const std::vector<uint8_t>& compressed) {
-    if (compressed.size() < 10) return {};
+bool HgtProvider::decompress_gz_file(const std::string& gz_path, const std::string& out_path) {
+    gzFile gz = gzopen(gz_path.c_str(), "rb");
+    if (!gz) return false;
 
-    z_stream strm{};
-    if (inflateInit2(&strm, 15 + 16) != Z_OK) return {};
+    FILE* out = fopen(out_path.c_str(), "wb");
+    if (!out) { gzclose(gz); return false; }
 
-    strm.next_in = const_cast<uint8_t*>(compressed.data());
-    strm.avail_in = static_cast<uInt>(compressed.size());
-
-    std::vector<uint8_t> output(30 * 1024 * 1024); // 30MB max
-    strm.next_out = output.data();
-    strm.avail_out = static_cast<uInt>(output.size());
-
-    int ret = inflate(&strm, Z_FINISH);
-    inflateEnd(&strm);
-
-    if (ret != Z_STREAM_END) {
-        LOG_WARN("HGT: inflate failed (ret=%d)", ret);
-        return {};
+    uint8_t buf[64 * 1024]; // 64KB stack buffer
+    int n;
+    while ((n = gzread(gz, buf, sizeof(buf))) > 0) {
+        if (fwrite(buf, 1, static_cast<size_t>(n), out) != static_cast<size_t>(n)) {
+            fclose(out);
+            gzclose(gz);
+            return false;
+        }
     }
 
-    output.resize(output.size() - strm.avail_out);
-    return output;
+    fclose(out);
+    gzclose(gz);
+    return n == 0; // 0 = EOF, -1 = error
+}
+
+bool HgtProvider::convert_hgt_to_float(const std::string& hgt_path, const std::string& dat_path) {
+    std::ifstream f(hgt_path, std::ios::binary | std::ios::ate);
+    if (!f) return false;
+
+    size_t file_size = static_cast<size_t>(f.tellg());
+    size_t samples = file_size / 2;
+
+    if (samples != 3601UL * 3601 && samples != 1201UL * 1201) {
+        LOG_WARN("HGT: unexpected size %zu bytes for %s", file_size, hgt_path.c_str());
+        return false;
+    }
+
+    f.seekg(0);
+    FILE* out = fopen(dat_path.c_str(), "wb");
+    if (!out) return false;
+
+    constexpr size_t CHUNK = 8192;
+    uint8_t in_buf[CHUNK * 2];
+    float out_buf[CHUNK];
+
+    size_t remaining = samples;
+    while (remaining > 0) {
+        size_t batch = std::min(remaining, CHUNK);
+        f.read(reinterpret_cast<char*>(in_buf), static_cast<std::streamsize>(batch * 2));
+
+        for (size_t i = 0; i < batch; ++i) {
+            int16_t val = static_cast<int16_t>((in_buf[i * 2] << 8) | in_buf[i * 2 + 1]);
+            if (val < -1000) val = 0;
+            out_buf[i] = static_cast<float>(val);
+        }
+
+        fwrite(out_buf, sizeof(float), batch, out);
+        remaining -= batch;
+    }
+
+    fclose(out);
+    return true;
 }
 
 } // namespace meshtile

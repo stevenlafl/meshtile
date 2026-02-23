@@ -84,6 +84,7 @@ set(SOURCES
     src/noise_map.cpp
     src/hgt_provider.cpp
     src/disk_cache.cpp
+    src/mmap_file.cpp
     src/log.cpp
 )
 
@@ -107,6 +108,7 @@ set(LIB_SOURCES
     src/signal_cache.cpp
     src/hgt_provider.cpp
     src/disk_cache.cpp
+    src/mmap_file.cpp
     src/log.cpp
 )
 

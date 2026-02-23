@@ -4,6 +4,7 @@
 #include <cmath>
 #include <algorithm>
 #include <future>
+#include <thread>
 #include <fstream>
 #include <filesystem>
 #include <cstdlib>
@@ -111,8 +112,9 @@ static std::vector<double> extract_profile(
 
 // ── Constructor ──
 
-SignalCache::SignalCache(const std::string& region)
-    : m_grid_cache([&region]{
+SignalCache::SignalCache(const std::string& region, int compute_threads)
+    : m_compute_threads(compute_threads > 0 ? static_cast<size_t>(compute_threads) : 0)
+    , m_grid_cache([&region]{
         const char* home = std::getenv("HOME");
         std::string base = home ? std::string(home) + "/.cache/meshtile"
                                 : std::string("/tmp/meshtile");
@@ -146,47 +148,65 @@ bool SignalCache::save_grid(const SignalGrid& grid, uint64_t params_hash) {
     int32_t rows = grid.rows, cols = grid.cols;
     std::memcpy(p, &rows, 4); p += 4;
     std::memcpy(p, &cols, 4); p += 4;
-    std::memcpy(p, grid.signal.data(), grid.signal.size() * sizeof(float));
+    std::memcpy(p, grid.signal, grid.signal_count() * sizeof(float));
 
     return m_grid_cache.write(key, buf);
 }
 
 bool SignalCache::load_grid(const std::string& node_id, uint64_t expected_hash,
                             SignalGrid& grid) {
-    std::string key = node_id + ".bin";
-    if (!m_grid_cache.has(key)) return false;
+    std::string path = m_grid_cache.cache_dir() + "/" + node_id + ".bin";
+    if (!fs::exists(path)) return false;
 
-    auto buf = m_grid_cache.read(key);
-    if (buf.size() < 20) return false;  // at least hash + id_len + some data
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
 
-    const uint8_t* p = buf.data();
-
+    // Read and validate hash
     uint64_t stored_hash;
-    std::memcpy(&stored_hash, p, 8); p += 8;
-    if (stored_hash != expected_hash) {
+    f.read(reinterpret_cast<char*>(&stored_hash), 8);
+    if (!f || stored_hash != expected_hash) {
         LOG_INFO("  Grid %s: params changed, will recompute", node_id.c_str());
         return false;
     }
 
+    // Read node_id
     uint32_t id_len;
-    std::memcpy(&id_len, p, 4); p += 4;
-    if (8 + 4 + id_len + sizeof(Bounds) + 8 > buf.size()) return false;
+    f.read(reinterpret_cast<char*>(&id_len), 4);
+    if (!f) return false;
 
-    grid.node_id = std::string(reinterpret_cast<const char*>(p), id_len); p += id_len;
-    std::memcpy(&grid.bounds, p, sizeof(Bounds)); p += sizeof(Bounds);
+    std::string stored_id(id_len, '\0');
+    f.read(stored_id.data(), id_len);
+    if (!f) return false;
+
+    // Read bounds, rows, cols
+    f.read(reinterpret_cast<char*>(&grid.bounds), sizeof(Bounds));
+    if (!f) return false;
 
     int32_t rows, cols;
-    std::memcpy(&rows, p, 4); p += 4;
-    std::memcpy(&cols, p, 4); p += 4;
+    f.read(reinterpret_cast<char*>(&rows), 4);
+    f.read(reinterpret_cast<char*>(&cols), 4);
+    if (!f) return false;
+
+    grid.node_id = stored_id;
     grid.rows = rows;
     grid.cols = cols;
 
-    size_t expected = static_cast<size_t>(rows) * cols * sizeof(float);
-    size_t remaining = buf.size() - static_cast<size_t>(p - buf.data());
-    if (remaining < expected) return false;
+    // Compute float data offset and validate file size
+    size_t float_offset = 8 + 4 + id_len + sizeof(Bounds) + 4 + 4;
+    size_t float_size = static_cast<size_t>(rows) * cols * sizeof(float);
 
-    grid.signal.resize(rows * cols);
-    std::memcpy(grid.signal.data(), p, expected);
+    f.seekg(0, std::ios::end);
+    size_t file_size = static_cast<size_t>(f.tellg());
+    if (float_offset + float_size > file_size) return false;
+    f.close();
+
+    // mmap just the float array
+    if (!grid.mmap_file.open(path, float_offset, float_size)) {
+        LOG_WARN("  Grid %s: mmap failed", node_id.c_str());
+        return false;
+    }
+
+    grid.signal = grid.mmap_file.as<float>();
     return true;
 }
 
@@ -243,12 +263,12 @@ SignalGrid SignalCache::compute_node(const Node& node, const RfConfig& rf_config
     for (int lt = lat_min; lt <= lat_max; ++lt) {
         for (int ln = lon_min; ln <= lon_max; ++ln) {
             int tile_rows = 0, tile_cols = 0;
-            std::vector<float> tile;
+            const float* tile_data = nullptr;
             {
                 std::lock_guard<std::mutex> lock(m_hgt_mutex);
-                tile = m_hgt.load(lt, ln, tile_rows, tile_cols);
+                tile_data = m_hgt.load(lt, ln, tile_rows, tile_cols);
             }
-            if (tile.empty()) continue;
+            if (!tile_data) continue;
 
             int actual_samp = tile_rows - 1;
             int ratio = 1;
@@ -263,7 +283,7 @@ SignalGrid SignalCache::compute_node(const Node& node, const RfConfig& rf_config
                     if (dst_r >= 0 && dst_r < total_rows &&
                         dst_c >= 0 && dst_c < total_cols) {
                         elevation[dst_r * total_cols + dst_c] =
-                            tile[src_r * tile_cols + src_c];
+                            tile_data[src_r * tile_cols + src_c];
                     }
                 }
             }
@@ -279,7 +299,8 @@ SignalGrid SignalCache::compute_node(const Node& node, const RfConfig& rf_config
     grid.bounds = elev_bounds;
     grid.rows = total_rows;
     grid.cols = total_cols;
-    grid.signal.assign(total_rows * total_cols, NO_SIGNAL);
+    grid.signal_vec.assign(total_rows * total_cols, NO_SIGNAL);
+    grid.signal = grid.signal_vec.data();
 
     double lat_res = (elev_bounds.max_lat - elev_bounds.min_lat) / (total_rows - 1);
     double lon_res = (elev_bounds.max_lon - elev_bounds.min_lon) / (total_cols - 1);
@@ -317,7 +338,7 @@ SignalGrid SignalCache::compute_node(const Node& node, const RfConfig& rf_config
             float dist_cells = std::sqrt(static_cast<float>(dr * dr + dc * dc));
 
             if (dist_cells < 0.5f) {
-                grid.signal[r * total_cols + c] = eirp;
+                grid.signal_vec[r * total_cols + c] = eirp;
                 continue;
             }
             if (dist_cells > max_range_cells) continue;
@@ -356,7 +377,7 @@ SignalGrid SignalCache::compute_node(const Node& node, const RfConfig& rf_config
                            - rf_config.rx_cable_loss_db;
 
             if (received >= rf_config.rx_sensitivity_dbm) {
-                grid.signal[r * total_cols + c] = received;
+                grid.signal_vec[r * total_cols + c] = received;
             }
         }
     }
@@ -392,22 +413,44 @@ bool SignalCache::precompute(const std::vector<Node>& nodes, const RfConfig& rf_
 
     LOG_INFO("  %zu cached, %zu to compute", to_load.size(), to_compute.size());
 
-    // Compute missing grids in parallel
+    // Compute missing grids with bounded concurrency
     if (!to_compute.empty()) {
-        std::vector<std::future<SignalGrid>> futures;
-        for (size_t idx : to_compute) {
-            futures.push_back(std::async(std::launch::async,
-                [this, &nodes, &rf_config, idx]() {
-                    LOG_INFO("  Computing node: %s", nodes[idx].name.c_str());
-                    return compute_node(nodes[idx], rf_config);
-                }));
-        }
+        size_t max_concurrent = m_compute_threads > 0
+            ? m_compute_threads
+            : std::thread::hardware_concurrency();
+        if (max_concurrent == 0) max_concurrent = 4;
 
-        for (size_t i = 0; i < futures.size(); ++i) {
-            auto grid = futures[i].get();
-            uint64_t hash = compute_params_hash(nodes[to_compute[i]], rf_config);
-            save_grid(grid, hash);
-            m_grids.push_back(std::move(grid));
+        for (size_t batch_start = 0; batch_start < to_compute.size();
+             batch_start += max_concurrent) {
+            size_t batch_end = std::min(batch_start + max_concurrent,
+                                        to_compute.size());
+
+            std::vector<std::future<SignalGrid>> futures;
+            for (size_t b = batch_start; b < batch_end; ++b) {
+                size_t idx = to_compute[b];
+                futures.push_back(std::async(std::launch::async,
+                    [this, &nodes, &rf_config, idx]() {
+                        LOG_INFO("  Computing node: %s", nodes[idx].name.c_str());
+                        return compute_node(nodes[idx], rf_config);
+                    }));
+            }
+
+            for (size_t i = 0; i < futures.size(); ++i) {
+                size_t idx = to_compute[batch_start + i];
+                auto grid = futures[i].get();
+                uint64_t hash = compute_params_hash(nodes[idx], rf_config);
+                save_grid(grid, hash);
+
+                // Discard the in-memory vector and reload via mmap
+                SignalGrid mmap_grid;
+                if (load_grid(nodes[idx].id, hash, mmap_grid)) {
+                    m_grids.push_back(std::move(mmap_grid));
+                } else {
+                    LOG_WARN("  Grid %s: mmap reload failed, keeping in RAM",
+                             nodes[idx].id.c_str());
+                    m_grids.push_back(std::move(grid));
+                }
+            }
         }
     }
 

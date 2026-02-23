@@ -10,4 +10,7 @@ std::string read_file(const std::string& path);
 // Fetch from URL or read from file, depending on the source string.
 std::string fetch_or_read(const std::string& source);
 
+// Stream URL contents directly to a file on disk. Returns true on success.
+bool fetch_to_file(const std::string& url, const std::string& dest_path);
+
 } // namespace meshtile

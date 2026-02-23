@@ -1,4 +1,5 @@
 #pragma once
+#include "mmap_file.h"
 #include <string>
 #include <vector>
 
@@ -50,7 +51,10 @@ struct SignalGrid {
     std::string node_id;
     Bounds bounds;
     int rows = 0, cols = 0;
-    std::vector<float> signal; // row-major dBm, -999 = no signal
+    std::vector<float> signal_vec;  // writable storage during computation
+    MmapFile mmap_file;             // owns the mmap when loaded from disk
+    const float* signal = nullptr;  // unified read pointer (into signal_vec or mmap)
+    size_t signal_count() const { return static_cast<size_t>(rows) * cols; }
 };
 
 } // namespace meshtile

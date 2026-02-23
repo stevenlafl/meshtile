@@ -63,4 +63,43 @@ std::string fetch_or_read(const std::string& source) {
     }
 }
 
+static size_t curl_write_file_cb(void* ptr, size_t size, size_t nmemb, void* userdata) {
+    return fwrite(ptr, size, nmemb, static_cast<FILE*>(userdata));
+}
+
+bool fetch_to_file(const std::string& url, const std::string& dest_path) {
+    FILE* fp = fopen(dest_path.c_str(), "wb");
+    if (!fp) {
+        LOG_ERROR("Cannot open %s for writing", dest_path.c_str());
+        return false;
+    }
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        fclose(fp);
+        LOG_ERROR("curl_easy_init failed");
+        return false;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_file_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+
+    CURLcode res = curl_easy_perform(curl);
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    curl_easy_cleanup(curl);
+    fclose(fp);
+
+    if (res != CURLE_OK || http_code != 200) {
+        LOG_WARN("fetch_to_file failed: %s (HTTP %ld)", curl_easy_strerror(res), http_code);
+        std::remove(dest_path.c_str());
+        return false;
+    }
+    return true;
+}
+
 } // namespace meshtile

@@ -19,6 +19,7 @@ int main(int argc, char* argv[]) {
     std::string nodes_source;
     std::string noise_source;
     float max_range = 30.0f;
+    int compute_threads = 0;  // 0 = hardware_concurrency
 
     meshtile::RfConfig rf_config;
     std::string colormap_name;
@@ -40,6 +41,7 @@ int main(int argc, char* argv[]) {
         else if (arg == "--ground-conductivity" && i + 1 < argc) rf_config.ground_conductivity = std::atof(argv[++i]);
         else if (arg == "--refractivity" && i + 1 < argc) rf_config.refractivity = std::atof(argv[++i]);
         else if (arg == "--colormap" && i + 1 < argc) colormap_name = argv[++i];
+        else if (arg == "--threads" && i + 1 < argc) compute_threads = std::atoi(argv[++i]);
     }
 
     if (!colormap_name.empty()) {
@@ -73,6 +75,7 @@ int main(int argc, char* argv[]) {
     LOG_INFO("  time-pct=%.1f location-pct=%.1f situation-pct=%.1f",
              rf_config.time_pct, rf_config.location_pct, rf_config.situation_pct);
     LOG_INFO("  colormap=%s", colormap_str(rf_config.colormap));
+    LOG_INFO("  threads=%d%s", compute_threads, compute_threads == 0 ? " (auto)" : "");
 
     // Fetch nodes
     meshtile::ApiClientConfig api_config;
@@ -103,7 +106,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Pre-compute signal grids
-    meshtile::SignalCache cache(region);
+    meshtile::SignalCache cache(region, compute_threads);
     cache.precompute(nodes, rf_config);
 
     // Start HTTP server

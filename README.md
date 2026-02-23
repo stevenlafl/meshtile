@@ -32,6 +32,7 @@ CMake auto-downloads all third-party dependencies via FetchContent (NTIA ITM, cp
 | `--nodes` | meshmapper API | Override node source with a URL or local JSON file |
 | `--noise-data` | meshmapper API | Override noise floor data with a URL or local file |
 | `--max-range` | `30` | Max propagation range per node (km) |
+| `--threads` | `0` (auto) | Number of concurrent grid computation threads (0 = CPU core count) |
 
 ### MeshMapper Regions
 
@@ -122,6 +123,22 @@ docker compose up
 ```
 
 The cache volume persists signal grids and HGT elevation data across container restarts, avoiding expensive recomputation. Each region gets its own cache namespace within the volume.
+
+## Memory Usage
+
+Signal grids and elevation data are memory-mapped from disk rather than loaded into RAM. This means runtime memory usage is low (~30 MiB at idle) and the OS automatically pages in only the data needed for active tile requests.
+
+However, **initial grid computation** (first run or after parameter changes) requires temporary RAM for each node being computed. Use `--threads` to control how many nodes compute simultaneously and limit peak memory:
+
+```bash
+# Low memory (~256 MiB): compute one node at a time
+./meshtile --threads 1
+
+# Default: uses all CPU cores (faster, but higher peak RAM)
+./meshtile
+```
+
+As a rule of thumb, each concurrent computation thread can use ~50-100 MiB. Once grids are cached, subsequent startups use minimal RAM regardless of thread count.
 
 ## How It Works
 
